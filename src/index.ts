@@ -1,7 +1,7 @@
 import { Servient, Helpers } from "@node-wot/core";
 import { HttpClientFactory } from "@node-wot/binding-http";
-import { CoapClientFactory } from "@node-wot/binding-coap";
-import axios from "axios";
+import { CoapClientFactory } from "@node-wot/binding-coap"
+import speedtest = require("speedtest-net")
 
 class ThingConfiguration {
   protocol = "";
@@ -15,12 +15,11 @@ class ThingConfiguration {
   }
 }
 
-const repoName = "angular/angular";
-const textTime = 5000;
+const textTime = 10000;
 const numberTime = 20000;
 const thingConfig: ThingConfiguration = new ThingConfiguration(
   "http://",
-  "192.168.178.28",
+  "192.168.178.27",
   false
 );
 
@@ -33,23 +32,6 @@ if (thingConfig.protocol == "http://") {
 
 const wotHelper = new Helpers(servient);
 
-function numberToString(number: number): string {
-  let string = "";
-  if (number < 99999) {
-    string = number.toString();
-  }
-  if (number > 99999 && number < 1000000) {
-    string = `${Math.trunc(number / 1000)} k`;
-  }
-
-  return string;
-}
-
-interface GithubRepository {
-  stargazers_count: number;
-  forks: number;
-}
-
 interface DisplayResponse {
   status: string;
 }
@@ -59,9 +41,9 @@ interface ActionResponse {
 }
 
 async function getTimeoutPromise(
-  data: [WoT.ConsumedThing, GithubRepository],
+  data: [WoT.ConsumedThing, speedtest.ResultEvent],
   timeout: number
-): Promise<[WoT.ConsumedThing, GithubRepository]> {
+): Promise<[WoT.ConsumedThing, speedtest.ResultEvent]> {
   return await new Promise((resolve) => {
     setTimeout(() => {
       resolve(data);
@@ -69,25 +51,37 @@ async function getTimeoutPromise(
   });
 }
 
-async function consumeThing([repo, td, wot]: [
-  GithubRepository,
+async function consumeThing([speedtest, td, wot]: [
+  speedtest.ResultEvent,
   WoT.ThingDescription,
   WoT.WoT
-]): Promise<[WoT.ConsumedThing, GithubRepository]> {
-  return [await wot.consume(td), repo];
+]): Promise<[WoT.ConsumedThing, speedtest.ResultEvent]> {
+  return [await wot.consume(td), speedtest];
 }
 
-function setDisplayTo(thing: WoT.ConsumedThing, text: string) {
-  const result: Promise<ActionResponse> = thing.invokeAction("display", {
-    body: text,
-  }) as Promise<ActionResponse>;
+class DisplayContent {
+  headline: string
+  subheadline: string
+  body: string
+
+  constructor(headline: string, subheadline: string, body: string){
+    this.headline = headline
+    this.subheadline = subheadline
+    this.body = body
+  }
+}
+
+function setDisplayTo(thing: WoT.ConsumedThing, content: DisplayContent) {
+  const result: Promise<ActionResponse> = thing.invokeAction("display", content) as Promise<ActionResponse>;
 
   result
     .then((result) => {
       if (result.display.status == "created") {
-        console.log(`Showing ${text} was successful`);
+        console.log(`Showing content was successful`);
+        console.log(content)
       } else {
-        console.warn(`Showing ${text} has failed`);
+        console.warn(`Showing content failed`);
+        console.warn(content)
       }
     })
     .catch((err) => {
@@ -95,13 +89,16 @@ function setDisplayTo(thing: WoT.ConsumedThing, text: string) {
     });
 }
 
+function runSpeedtest() {
+  console.log("Speedtest is running...")
+  return speedtest()
+}
+
 const thingAddress: string = thingConfig.ipv6
   ? `[${thingConfig.address}]`
   : thingConfig.address;
 const responses = Promise.all([
-  axios
-    .get(`https://api.github.com/repos/${repoName}`)
-    .then((res) => res.data as GithubRepository),
+  runSpeedtest(),
   wotHelper.fetch(
     `${thingConfig.protocol}${thingAddress}/.well-known/wot-thing-description`
   ),
@@ -115,25 +112,32 @@ consumeThingResponse.catch((err) => {
 });
 
 consumeThingResponse
-  .then(async ([thing, repo]) => {
-    setDisplayTo(thing, "Github");
-    return getTimeoutPromise([thing, repo], textTime);
+  .then(async ([thing, speedtest]) => {
+    const content = new DisplayContent(
+      'Ping',
+      speedtest.server.location, 
+      `${speedtest.ping.latency} ms`
+      )
+    setDisplayTo(thing, content);
+    return getTimeoutPromise([thing, speedtest], textTime);
   })
-  .then(async ([thing, repo]) => {
-    setDisplayTo(thing, "stars");
-    return getTimeoutPromise([thing, repo], textTime);
+  .then(async ([thing, speedtest]) => {
+    const content = new DisplayContent(
+      'Download', 
+      speedtest.server.location, 
+      `${(speedtest.download.bandwidth*8 / 1000000).toFixed(2)} mbit/s`
+      )
+    setDisplayTo(thing, content);
+    return getTimeoutPromise([thing, speedtest], textTime);
   })
-  .then(async ([thing, repo]) => {
-    setDisplayTo(thing, numberToString(repo.stargazers_count));
-    return getTimeoutPromise([thing, repo], numberTime);
-  })
-  .then(async ([thing, repo]) => {
-    setDisplayTo(thing, "forks");
-    return getTimeoutPromise([thing, repo], textTime);
-  })
-  .then(async ([thing, repo]) => {
-    setDisplayTo(thing, numberToString(repo.forks));
-    return getTimeoutPromise([thing, repo], numberTime);
+  .then(async ([thing, speedtest]) => {
+    const content = new DisplayContent(
+      'Upload', 
+      speedtest.server.location, 
+      `${(speedtest.upload.bandwidth*8 / 1000000).toFixed(2)} mbit/s`
+      )
+    setDisplayTo(thing, content);
+    return getTimeoutPromise([thing, speedtest], textTime);
   })
   .catch((err) => {
     console.error("Fetch error:", err);
